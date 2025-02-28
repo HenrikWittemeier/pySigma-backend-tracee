@@ -1,0 +1,123 @@
+# This file is a template, and might need editing before it works on your project.
+# This is a sample GitLab CI/CD configuration file that should run without any modifications.
+# It demonstrates a basic 3 stage CI/CD pipeline. Instead of real tests or scripts,
+# it uses echo commands to simulate the pipeline execution.
+#
+# A pipeline is composed of independent jobs that run scripts, grouped into stages.
+# Stages run in sequential order, but jobs within stages run in parallel.
+#
+# For more information, see: https://docs.gitlab.com/ee/ci/yaml/index.html#stages
+#
+# You can copy and paste this template into a new `.gitlab-ci.yml` file.
+# You should not add this template to an existing `.gitlab-ci.yml` file by using the `include:` keyword.
+#
+# To contribute improvements to CI/CD templates, please follow the Development guide at:
+# https://docs.gitlab.com/ee/development/cicd/templates.html
+# This specific template is located at:
+# https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Getting-Started.gitlab-ci.yml
+
+stages:          # List of stages for jobs, and their order of execution
+  - get_rules
+  - build_converter
+  - convert
+  - build
+  - package
+  - deploy
+
+collect-job:      
+  image: bitnami/git
+  stage: get_rules
+  script:
+    - git clone --depth 1 https://github.com/SigmaHQ/sigma.git sigma_repo
+    - mkdir -p sigma_rules/rules-foran
+    - mv sigma-rules/* sigma_rules/rules-foran/
+    - mv sigma_repo/rules* sigma_rules/
+    - echo "$(find sigma_rules -type f | grep ".yml" | wc -l) Regeln vorhanden."
+    - tar cfz sigma_rules.tar.gz sigma_rules
+  artifacts:
+    expire_in: 30 days
+    name: sigma_rules.tar.gz
+    paths: 
+      - sigma_rules.tar.gz
+
+build_converter:
+  image: python:3.12
+  stage: build_converter
+  script:
+    - pip install poetry twine
+    - poetry install
+    - poetry build
+    - TWINE_PASSWORD=${CI_JOB_TOKEN} TWINE_USERNAME=gitlab-ci-token python -m twine upload --verbose --repository-url https://git.dn.fh-koeln.de/api/v4/projects/${CI_PROJECT_ID}/packages/pypi dist/*
+  rules:
+    - changes:
+        - pyproject.toml
+    - if: $CI_PIPELINE_SOURCE !~ "schedule"
+      when: never
+convert-job:
+  image: python:3.12
+  stage: convert
+  script:
+    - tar -xf sigma_rules.tar.gz
+    - pip install .
+  #  - find sigma_rules/rules/linux -type f -name "*.yml" | xargs -i sigma convert --skip-unsupported -t tracee {} -o {}.go || true #Remove rules/linux for full Repo
+    - mkdir tracee_signatures
+    - python3 convert.py sigma_rules
+ #   - find . -type f -name "*.go" -exec mv {} tracee_signatures/ \;
+    - tar cfz tracee_signatures.tar.gz tracee_signatures/*
+  artifacts:
+    paths:
+      - tracee_signatures.tar.gz
+
+build-tracee:
+  image: cruizba/ubuntu-dind
+  stage: build
+  script:
+    - apt update && apt install -y git clang llvm golang libelf-dev make libzstd-dev zlib1g-dev
+    - git config user.email "ci@dn.th-koeln.de"
+    - git config user.name "ci.bot"
+    - git remote set-url origin https://oauth2:${GITLAB_ACCESS_TOKEN}@git.dn.fh-koeln.de/${CI_PROJECT_PATH}
+    - git clone https://github.com/aquasecurity/tracee.git
+    - cp deploy/toOpensearch.tmpl tracee/cmd/tracee-rules/templates/
+    - cd tracee
+    - git checkout tags/v0.22.0
+    - cd ..
+    - rm -rf tracee/signatures/golang/*
+    - tar -xf tracee_signatures.tar.gz
+    - mv tracee_signatures/* tracee/signatures/golang/
+    - cd tracee/signatures/golang
+    - |
+      echo "package main
+      import \"github.com/aquasecurity/tracee/types/detect\"
+      
+      // ExportedSignatures fulfills the goplugins contract required by the rule-engine
+      // this is a list of signatures that this plugin exports
+      var ExportedSignatures = []detect.Signature{
+      " > export.go
+    - cat export.go
+    - echo $(grep -ohPR "type (.*) struct" | sort |  awk '{print "&"$2"{},"}' >> export.go) || true
+    - |
+      echo $(grep -ohPR "type (.*) struct" | sort |  awk '{print "    - event: "$2}' >> ../../../deploy/crd-tracee-policy.yaml) || true
+
+    - mv ../../../deploy/crd-tracee-policy.yaml ../../../deploy/crd-job/chart/templates/crd-tracee-policy.yaml
+    - |
+      echo "
+      }
+
+      // ExportedDataSources fulfills the goplugins contract required by the rule-engine
+      // this is a list of data-sources that this plugin exports
+      var ExportedDataSources = []detect.DataSource{
+          // add data-sources here
+      }" >> export.go
+    - cat export.go
+    - cd ../..
+    - make -f builder/Makefile.tracee-container build-tracee
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker tag tracee $CI_REGISTRY/foran/pysigma-backend-tracee/tracee:latest
+    - docker push $CI_REGISTRY/foran/pysigma-backend-tracee/tracee:latest
+    - cd ..
+    - git add deploy/crd-job/chart/templates/crd-tracee-policy.yaml
+    - git commit -m "Updated CRD through CI" || true
+    - git push origin HEAD:main -o ci.skip
+  artifacts:
+    paths:
+      - deploy/crd-job/chart/templates/crd-tracee-policy.yaml

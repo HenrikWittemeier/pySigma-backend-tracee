@@ -1,0 +1,10 @@
+apiVersion: tracee.aquasec.com/v1beta1
+kind: Policy
+metadata:
+  name: sigma-tracee
+  annotations:
+    description: Traces events derived from Sigma Rules
+spec:
+  scope:
+    - global
+  rules:

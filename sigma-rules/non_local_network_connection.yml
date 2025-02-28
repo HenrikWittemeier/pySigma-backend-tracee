@@ -1,0 +1,29 @@
+title: Non local network Connection
+id: 9a9cd6be-1749-4b6c-a1ce-3c071909428a
+status: test
+description: Detects all network connections to non private subnets
+references:
+    - https://en.wikipedia.org/wiki/Private_network
+author: Henrik Wittemeier (TH Köln)
+date: 2024-11-12
+tags:
+    - attack.command-and-control
+    - attack.ta0011
+logsource:
+    category: network_connection
+    product: linux
+detection:
+    selection:
+        DestinationIp|cidr:
+            - '127.0.0.0/8'
+            - '::1/128'
+            - '10.0.0.0/8'
+            - '172.16.0.0/12'
+            - '192.168.0.0/16'
+            - 'fc00::/7'
+            - 'fe80::/10'
+
+    condition: not 1 of selection
+falsepositives:
+    - Accepted connections to the Internet
+level: low

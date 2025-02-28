@@ -1,0 +1,22 @@
+title: Insert key to authorized Keys
+id: a9d876ea-d1c3-4bb2-8af4-56c85989cbb0
+status: test
+description: Detects changes of the .ssh/authorized_keys
+references:
+    - TBD
+author: Henrik Wittemeier (TH Köln)
+date: 2024-11-15
+tags:
+    - persistence.command-and-control
+    - persistence.T1098.004
+logsource:
+    category: file_event
+    product: linux
+detection:
+    selection:
+        TargetFilename|endswith: '.ssh/authorized_keys'
+    condition: selection
+falsepositives:
+    - Accepted Changes of Authorized Keys
+level: high
+

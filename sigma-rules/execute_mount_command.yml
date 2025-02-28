@@ -1,0 +1,21 @@
+title: Execute Mount Command
+id: cbc73958-6303-451f-9738-2909b0024782
+status: test
+description: Detects the usage of the mount command
+references:
+    - TBD
+author: Henrik Wittemeier (TH Köln)
+date: 2024-11-15
+tags:
+    - persistence.privilege-escalation
+logsource:
+    category: process_creation
+    product: linux
+detection:
+    selection:
+        Image|endswith: '/mount'
+    condition: selection
+falsepositives:
+    - Mounting filesystems
+level: high
+
